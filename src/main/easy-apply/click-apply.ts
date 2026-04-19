@@ -595,14 +595,57 @@ export async function easyApplyClickApplyButton(
       }
     }
 
+
+    // When CDP isn't available (tabId null), fall back to the content script⭐
+    // bridge to discover an SDUI URL before giving up.⭐
+    if (tabId == null && !locatedSduiApplyUrl && !clickResult?.ok) {
+      try {
+        const bridgeLocate = await easyApplyBridgeCommand(
+          'CLICK_EASY_APPLY', {}, 'click_apply', 'fallback_locate'
+        )
+        if (bridgeLocate.ok) {
+          const locateData = (bridgeLocate as { data?: unknown }).data
+          const locateDataObj = locateData && typeof locateData === 'object'
+            ? locateData as Record<string, unknown>
+            : undefined
+          if (locateDataObj?.sduiApplyUrl) {
+            locatedSduiApplyUrl = String(locateDataObj.sduiApplyUrl)
+          }
+          clickResult = bridgeLocate
+        }
+      } catch (err) {
+        appLog.warn('[easy-apply] Bridge locate fallback failed:',
+          err instanceof Error ? err.message : String(err))
+      }
+    }
+
+
     if (!clickResult?.ok) {
       const check = await checkFormAlreadyOpen()
       if (!check.formOpen) {
         const detail = String(clickResult?.detail || '')
-        applyTrace('easy_apply:click_apply_failed', { detail: detail.slice(0, 300), ...check })
-        return { earlyExit: { ok: false, phase: 'click_apply', detail: detail || 'Could not find Easy Apply button.' }, clickResult, sduiApplyUrl: undefined, cdpClickSucceeded }
+        if (locatedSduiApplyUrl) { //⭐ replaced the orignal code here
+          const opened = await handleSduiNavigation(locatedSduiApplyUrl, cdpClickSucceeded, detail)
+          if (!opened) {
+            return {
+              earlyExit: {
+                ok: false,
+                phase: 'click_apply',
+                detail: "The Easy Apply form didn't open on this page. The job may have been removed or may not support Easy Apply."
+              },
+              clickResult,
+              sduiApplyUrl: locatedSduiApplyUrl,
+              cdpClickSucceeded
+            }
+          }
+
+        } else { //⭐ shifted the original code down here as a else statement
+          applyTrace('easy_apply:click_apply_failed', { detail: detail.slice(0, 300), ...check })
+          return { earlyExit: { ok: false, phase: 'click_apply', detail: detail || 'Could not find Easy Apply button.' }, clickResult, sduiApplyUrl: undefined, cdpClickSucceeded }
+        }
       }
     }
+
     // Wait for modal to render
     await new Promise((r) => setTimeout(r, 1500 + Math.random() * 2000))
 
